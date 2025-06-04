@@ -6,6 +6,7 @@ import fetch from "node-fetch";
 const GITLAB_API_URL = process.env.GITLAB_API_URL || "https://gitlab.com";
 const GITLAB_TOKEN = process.env.GITLAB_TOKEN_TEST || process.env.GITLAB_TOKEN;
 const TEST_PROJECT_ID = process.env.TEST_PROJECT_ID;
+const USE_GITLAB_WIKI = process.env.USE_GITLAB_WIKI === "true";
 
 async function validateGitLabAPI() {
   console.log("🔍 Validating GitLab API connection...\n");
@@ -52,6 +53,7 @@ async function validateGitLabAPI() {
 
   let allPassed = true;
   let firstPipelineId = null;
+  let firstWikiSlug = null;
 
   for (const test of tests) {
     try {
@@ -71,7 +73,85 @@ async function validateGitLabAPI() {
 
       if (test.validate(data)) {
         console.log(`✅ ${test.name} - PASSED\n`);
-        
+
+        // After fetching project info, optionally test wiki endpoints
+        if (test.name === "Fetch project info" && USE_GITLAB_WIKI) {
+          const wikiListUrl = `${GITLAB_API_URL}/api/v4/projects/${encodeURIComponent(
+            TEST_PROJECT_ID
+          )}/wikis?per_page=1`;
+          try {
+            console.log("Testing: List wiki pages");
+            const wikiListResponse = await fetch(wikiListUrl, {
+              headers: {
+                Authorization: `Bearer ${GITLAB_TOKEN}`,
+                Accept: "application/json",
+              },
+            });
+
+            if (!wikiListResponse.ok) {
+              throw new Error(
+                `HTTP ${wikiListResponse.status}: ${wikiListResponse.statusText}`
+              );
+            }
+
+            const wikiListData = await wikiListResponse.json();
+            if (Array.isArray(wikiListData)) {
+              console.log(`✅ List wiki pages - PASSED\n`);
+              if (wikiListData.length > 0) {
+                firstWikiSlug = wikiListData[0].slug;
+              }
+            } else {
+              console.log(
+                `❌ List wiki pages - FAILED (invalid response format)\n`
+              );
+              allPassed = false;
+            }
+          } catch (error) {
+            console.log(`❌ List wiki pages - FAILED`);
+            console.log(`   Error: ${error.message}\n`);
+            allPassed = false;
+          }
+
+          if (firstWikiSlug) {
+            const wikiPageUrl = `${GITLAB_API_URL}/api/v4/projects/${encodeURIComponent(
+              TEST_PROJECT_ID
+            )}/wikis/${encodeURIComponent(firstWikiSlug)}`;
+            try {
+              console.log(`Testing: Get wiki page \`${firstWikiSlug}\``);
+              const wikiPageResponse = await fetch(wikiPageUrl, {
+                headers: {
+                  Authorization: `Bearer ${GITLAB_TOKEN}`,
+                  Accept: "application/json",
+                },
+              });
+
+              if (!wikiPageResponse.ok) {
+                throw new Error(
+                  `HTTP ${wikiPageResponse.status}: ${wikiPageResponse.statusText}`
+                );
+              }
+
+              const wikiPageData = await wikiPageResponse.json();
+              if (
+                wikiPageData &&
+                wikiPageData.slug === firstWikiSlug &&
+                wikiPageData.title
+              ) {
+                console.log(`✅ Get wiki page \`${firstWikiSlug}\` - PASSED\n`);
+              } else {
+                console.log(
+                  `❌ Get wiki page \`${firstWikiSlug}\` - FAILED (invalid response format)\n`
+                );
+                allPassed = false;
+              }
+            } catch (error) {
+              console.log(`❌ Get wiki page \`${firstWikiSlug}\` - FAILED`);
+              console.log(`   Error: ${error.message}\n`);
+              allPassed = false;
+            }
+          }
+        }
+
         // If we found pipelines, save the first one for additional testing
         if (test.name === "List pipelines" && data.length > 0) {
           firstPipelineId = data[0].id;
